@@ -1,23 +1,38 @@
 import os
-
 from flask import Flask
 from dotenv import load_dotenv
-from propelauth_flask import init_auth, current_user, current_org
+from flask_sqlalchemy import SQLAlchemy
+from propelauth_flask import init_auth
+from flask_migrate import Migrate
+from flask_cors import CORS
 
+# Load environment variables
 load_dotenv()
 
+# Initialize Flask app
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'  # Use SQLite for simplicity
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Enable CORS
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Initialize database
+db = SQLAlchemy(app)
+
+# Initialize Flask-Migrate
+migrate = Migrate(app, db)
+
+# Initialize PropelAuth
 auth = init_auth(os.getenv("PROPELAUTH_AUTH_URL"), os.getenv("PROPELAUTH_API_KEY"))
 
-@app.route("/whoami")
-@auth.require_user
-def who_am_i():
-    """This route is protected by require_user"""
-    return {"user_id": current_user.user_id}
+from routes.user_routes import create_user_routes
+from routes.org_routes import create_org_routes
 
+# Register Blueprints
+app.register_blueprint(create_user_routes(auth), url_prefix="/users")
+app.register_blueprint(create_org_routes(auth), url_prefix="/orgs")
 
-@app.route("/org/<org_id>")
-@auth.require_org_member()
-def org_info(org_id):
-    return {"org_id": current_org.org_id, 
-      "org_name":   current_org.org_name}
+# Run the app
+if __name__ == "__main__":
+    app.run(port=3001)
