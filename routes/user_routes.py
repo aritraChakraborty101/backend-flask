@@ -155,6 +155,44 @@ def create_user_routes(auth):
         user_to_ban.is_banned = True
         db.session.commit()
         return jsonify({"message": "User banned successfully"}), 200
+    
+
+    @bp.route("/all_users", methods=["GET"])
+    def get_all_users():
+        try:
+            # Fetch all users from the database
+            users = User.query.all()
+            user_list = [
+                {
+                    "prope_user_id": user.propel_user_id,
+                    "name": user.name,
+                    "email": user.email,  # Include only if email is public
+                }
+                for user in users
+            ]
+            return jsonify(user_list), 200
+        except Exception as e:
+            print(f"Error fetching all users: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+    
+    @bp.route("/public_profile/<string:prope_user_id>", methods=["GET"])
+    def get_public_profile(prope_user_id):
+        try:
+            # Fetch the user by their PropelAuth user ID
+            user = User.query.filter_by(propel_user_id=prope_user_id).first()
+            if not user:
+                return jsonify({"error": "User not found"}), 404
+
+            # Return only public information
+            public_profile = {
+                "name": user.name,
+                "email": user.email,  # Include only if email is public
+                "contributions": user.contributions,  # Example: public contributions
+            }
+            return jsonify(public_profile), 200
+        except Exception as e:
+            print(f"Error fetching public profile: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
 
 
     # @bp.route("/users/<int:user_id>", methods=["DELETE"])
@@ -186,6 +224,28 @@ def create_user_routes(auth):
             return jsonify({"error": "User not found"}), 404
 
         return jsonify({"role": user.role}), 200
+
+
+    @bp.route("/update_name", methods=["PATCH"])
+    @auth.require_user
+    def update_name():
+        try:
+            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+            if not user:
+                return jsonify({"error": "User not found"}), 404
+
+            data = request.get_json()
+            new_name = data.get("name")
+            if not new_name:
+                return jsonify({"error": "Name is required"}), 400
+
+            user.name = new_name
+            db.session.commit()
+
+            return jsonify({"message": "Name updated successfully!"}), 200
+        except Exception as e:
+            print(f"Error updating name: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
 
 
     return bp
