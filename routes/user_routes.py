@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from propelauth_flask import current_user
-from models import db, User, RoleRequest
+from models import db, User, RoleRequest, UserReport
 
 def create_user_routes(auth):
     bp = Blueprint("user_routes", __name__)
@@ -192,6 +192,100 @@ def create_user_routes(auth):
             return jsonify(public_profile), 200
         except Exception as e:
             print(f"Error fetching public profile: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+        
+    
+    @bp.route("/report_user", methods=["POST"])
+    @auth.require_user
+    def report_user():
+        try:
+            data = request.get_json()
+            reported_user_id = data.get("reported_user_id")
+            reporter_user_id = data.get("reporter_user_id")  # Get reporter ID from the request
+            issue = data.get("issue")
+
+            if not reported_user_id or not reporter_user_id or not issue:
+                return jsonify({"error": "Reported user ID, reporter user ID, and issue are required"}), 400
+
+            # Fetch the reporter and reported user from the database
+            reporter_user = User.query.filter_by(propel_user_id=reporter_user_id).first()
+            reported_user = User.query.filter_by(propel_user_id=reported_user_id).first()
+
+            if not reporter_user or not reported_user:
+                return jsonify({"error": "Invalid user IDs"}), 404
+
+            # Create a new report
+            report = UserReport(
+                reported_user_id=reported_user.id,
+                reporter_user_id=reporter_user.id,
+                issue=issue
+            )
+            db.session.add(report)
+            db.session.commit()
+
+            return jsonify({"message": "Report submitted successfully!"}), 201
+        except Exception as e:
+            print(f"Error reporting user: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+    
+
+    @bp.route("/reports", methods=["GET"])
+    @auth.require_user
+    def get_reports():
+        try:
+            reports = UserReport.query.all()
+            report_list = [
+                {
+                    "id": report.id,
+                    "reported_user": User.query.get(report.reported_user_id).name,
+                    "reporter_user": User.query.get(report.reporter_user_id).name,
+                    "issue": report.issue,
+                    "status": report.status,
+                    "created_at": report.created_at,
+                }
+                for report in reports
+            ]
+            return jsonify(report_list), 200
+        except Exception as e:
+            print(f"Error fetching reports: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+        
+    
+    @bp.route("/resolve_report/<int:report_id>", methods=["PATCH"])
+    @auth.require_user
+    def resolve_report(report_id):
+        try:
+            data = request.get_json()
+            action = data.get("action")  # "ban" or "reject"
+
+            # Fetch the report from the database
+            report = UserReport.query.get(report_id)
+            if not report:
+                return jsonify({"error": "Report not found"}), 404
+
+            if action == "ban":
+                # Ban the reported user
+                reported_user = User.query.get(report.reported_user_id)
+                if not reported_user:
+                    return jsonify({"error": "Reported user not found"}), 404
+                reported_user.is_banned = True
+                report.status = "resolved"
+            elif action == "reject":
+                # Reject the report
+                report.status = "rejected"
+            else:
+                return jsonify({"error": "Invalid action"}), 400
+
+            # Commit the changes to the user or report status
+            db.session.commit()
+
+            # Delete the report from the database
+            db.session.delete(report)
+            db.session.commit()
+
+            return jsonify({"message": "Report resolved and deleted successfully!"}), 200
+        except Exception as e:
+            print(f"Error resolving report: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
 
 
