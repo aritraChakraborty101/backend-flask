@@ -9,9 +9,9 @@ from flask_cors import CORS
 # Load environment variables
 load_dotenv()
 
-# Initialize Flask app
+
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'  # Use SQLite for simplicity
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db' 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Enable CORS
