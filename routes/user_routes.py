@@ -4,7 +4,6 @@ from models import db, User, RoleRequest, UserReport
 
 def create_user_routes(auth):
     bp = Blueprint("user_routes", __name__)
-
     @bp.route("/sync", methods=["POST"])
     def sync_user():
         try:
