@@ -13,7 +13,6 @@ def create_user_routes(auth):
             email = data.get("email")
             name = data.get("name")
             print(f"Extracted user info: ID={propel_user_id}, Email={email}, Name={name}")
-
             # Check if user exists
             user = User.query.filter_by(propel_user_id=propel_user_id).first()
             if not user:

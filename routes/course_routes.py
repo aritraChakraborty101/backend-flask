@@ -40,6 +40,12 @@ def create_course_routes(auth):
     def get_posts(course_id):
         """Fetch all posts for a course"""
         try:
+            course_name = Course.query.filter_by(id=course_id).first()
+            if not course_name:
+                return jsonify({"error": "Course not found"}), 404
+            course_name = course_name.name
+
+            # Fetch posts for the course
             posts = Post.query.filter_by(course_id=course_id).all()
             post_list = []
             for post in posts:
@@ -58,6 +64,7 @@ def create_course_routes(auth):
                     "upvotes": post.upvotes,
                     "downvotes": post.downvotes,
                     "created_at": post.created_at,
+                    "course_name": course_name,
                 })
 
             return jsonify(post_list), 200
@@ -168,4 +175,113 @@ def create_course_routes(auth):
         return jsonify({"message": "Post updated successfully!"}), 200
     
 
+    @bp.route("/posts/<int:post_id>", methods=["DELETE"])
+    @auth.require_user
+    def delete_post(post_id):
+        data = request.get_json()
+        user_id = data.get("user_id")
+
+        post = Post.query.get(post_id)
+        if not post:
+            return jsonify({"error": "Post not found"}), 404
+
+        if post.user_id != user_id:
+            return jsonify({"error": "You are not authorized to delete this post"}), 403
+
+        db.session.delete(post)
+        db.session.commit()
+        return jsonify({"message": "Post deleted successfully!"}), 200
+    
+    # Create a new comment
+    @bp.route("/posts/<int:post_id>/comments", methods=["POST"])
+    @auth.require_user
+    def create_comment(post_id):
+        """Create a comment for a post."""
+        data = request.get_json()
+        user_id = data.get("user_id")
+        content = data.get("content")
+
+        if not content:
+            return jsonify({"error": "Content is required"}), 400
+
+        try:
+            comment = Comment(post_id=post_id, user_id=user_id, content=content)
+            db.session.add(comment)
+            db.session.commit()
+            return jsonify({"message": "Comment added successfully!"}), 201
+        except Exception as e:
+            return jsonify({"error": "Failed to add comment", "details": str(e)}), 500
+        
+
+    # Fetch all comments for a post
+    @bp.route("/posts/<int:post_id>/comments", methods=["GET"])
+    def get_comments(post_id):
+        """Fetch all comments for a post."""
+        try:
+            comments = Comment.query.filter_by(post_id=post_id).order_by(Comment.created_at.asc()).all()
+            comments_data = [
+                {
+                    "id": comment.id,
+                    "user_id": comment.user_id,
+                    "author": User.query.filter_by(propel_user_id=comment.user_id).first().name,
+                    "content": comment.content,
+                    "created_at": comment.created_at
+                }
+                for comment in comments
+            ]
+            return jsonify(comments_data), 200
+        except Exception as e:
+            return jsonify({"error": "Failed to fetch comments", "details": str(e)}), 500
+        
+    # Edit a comment
+    @bp.route("/comments/<int:comment_id>", methods=["PUT"])
+    @auth.require_user
+    def edit_comment(comment_id):
+        """Edit a comment."""
+        data = request.get_json()
+        user_id = data.get("user_id")
+        content = data.get("content")
+
+        if not content:
+            return jsonify({"error": "Content is required"}), 400
+
+        comment = Comment.query.get(comment_id)
+        if not comment:
+            return jsonify({"error": "Comment not found"}), 404
+
+        if comment.user_id != user_id:
+            return jsonify({"error": "You are not authorized to edit this comment"}), 403
+
+        try:
+            comment.content = content
+            db.session.commit()
+            return jsonify({"message": "Comment updated successfully!"}), 200
+        except Exception as e:
+            return jsonify({"error": "Failed to update comment", "details": str(e)}), 500
+        
+    # Delete a comment
+    @bp.route("/comments/<int:comment_id>", methods=["DELETE"])
+    @auth.require_user
+    def delete_comment(comment_id):
+        """Delete a comment."""
+        data = request.get_json()
+        user_id = data.get("user_id")
+
+        comment = Comment.query.get(comment_id)
+        if not comment:
+            return jsonify({"error": "Comment not found"}), 404
+
+        if comment.user_id != user_id:
+            return jsonify({"error": "You are not authorized to delete this comment"}), 403
+
+        try:
+            db.session.delete(comment)
+            db.session.commit()
+            return jsonify({"message": "Comment deleted successfully!"}), 200
+        except Exception as e:
+            return jsonify({"error": "Failed to delete comment", "details": str(e)}), 500
+    
+
     return bp
+
+    
