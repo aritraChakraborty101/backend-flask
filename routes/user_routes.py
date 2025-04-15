@@ -4,7 +4,6 @@ from models import db, User, RoleRequest, UserReport
 
 def create_user_routes(auth):
     bp = Blueprint("user_routes", __name__)
-
     @bp.route("/sync", methods=["POST"])
     def sync_user():
         try:
@@ -14,7 +13,6 @@ def create_user_routes(auth):
             email = data.get("email")
             name = data.get("name")
             print(f"Extracted user info: ID={propel_user_id}, Email={email}, Name={name}")
-
             # Check if user exists
             user = User.query.filter_by(propel_user_id=propel_user_id).first()
             if not user:

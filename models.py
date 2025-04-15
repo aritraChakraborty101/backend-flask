@@ -53,3 +53,33 @@ class NoteReport(db.Model):
     reporter_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     reason = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=db.func.now())
+    status = db.Column(db.String(20), default="pending")  # pending, resolved, rejected
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+class Course(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    user_id = db.Column(db.String(255), db.ForeignKey('user.propel_user_id'), nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    upvotes = db.Column(db.Integer, default=0)
+    downvotes = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class Comment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.String(255), db.ForeignKey('user.propel_user_id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class Vote(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.String(255), db.ForeignKey('user.propel_user_id'), nullable=False)
+    vote_type = db.Column(db.String(10), nullable=False)  # "upvote" or "downvote"
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
