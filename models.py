@@ -56,6 +56,14 @@ class NoteReport(db.Model):
     status = db.Column(db.String(20), default="pending")  # pending, resolved, rejected
     created_at = db.Column(db.DateTime, default=db.func.now())
 
+class NoteComment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    user_id = db.Column(db.String(255), nullable=False)  # Or use an integer foreign key if you prefer
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+
 class Course(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
