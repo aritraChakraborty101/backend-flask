@@ -4,6 +4,7 @@ certifi==2025.1.31
 cffi==1.17.1
 charset-normalizer==3.4.1
 click==8.1.8
+cloudinary==1.44.0
 cryptography==44.0.2
 Flask==3.1.0
 flask-cors==5.0.1
@@ -21,6 +22,7 @@ pycparser==2.22
 PyJWT==2.10.1
 python-dotenv==1.1.0
 requests==2.32.3
+six==1.17.0
 SQLAlchemy==2.0.40
 typing_extensions==4.13.1
 urllib3==2.3.0
