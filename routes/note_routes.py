@@ -63,6 +63,9 @@ def create_note_routes(auth):
                 status="pending"
             )
             db.session.add(note)
+
+            if not user.contributions:
+                user.contributions = 0
             user.contributions += 1
             db.session.commit()
 
