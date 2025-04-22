@@ -112,8 +112,8 @@ class ConnectionRequest(db.Model):
     requester = db.relationship('User', foreign_keys=[requester_id], backref='connection_requests')
     receiver = db.relationship('User', foreign_keys=[receiver_id], backref='received_requests')
 
-class Page(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200), nullable=False)
-    content = db.Column(db.Text, nullable=False)
-    slug = db.Column(db.String(200), unique=True, nullable=False)
+# class Page(db.Model):
+#     id = db.Column(db.Integer, primary_key=True)
+#     title = db.Column(db.String(200), nullable=False)
+#     content = db.Column(db.Text, nullable=False)
+#     slug = db.Column(db.String(200), unique=True, nullable=False)
