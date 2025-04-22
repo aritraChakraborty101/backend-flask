@@ -39,14 +39,14 @@ from routes.org_routes import create_org_routes
 from routes.note_routes import create_note_routes
 from routes.course_routes import create_course_routes
 from routes.message_routes import create_message_routes
-
+from routes.connection_routes import create_connection_routes
 # Register Blueprints
 app.register_blueprint(create_user_routes(auth), url_prefix="/users")
 app.register_blueprint(create_org_routes(auth), url_prefix="/orgs")
 app.register_blueprint(create_note_routes(auth), url_prefix="/notes")  # Pass auth here
 app.register_blueprint(create_course_routes(auth), url_prefix="/courses")
 app.register_blueprint(create_message_routes(auth), url_prefix="/messages")  # Pass auth here
-
+app.register_blueprint(create_connection_routes(auth), url_prefix="/connections")
 # Run the app
 if __name__ == "__main__":
     app.run(port=3001)
