@@ -11,6 +11,8 @@ class User(db.Model):
     courses_enrolled = db.Column(db.Text)  # JSON string
     contributions = db.Column(db.Integer, default=0)
     is_banned = db.Column(db.Boolean, default=False)
+    def __repr__(self):
+        return f"<User {self.email}>"
 
 class RoleRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -112,8 +114,7 @@ class ConnectionRequest(db.Model):
     requester = db.relationship('User', foreign_keys=[requester_id], backref='connection_requests')
     receiver = db.relationship('User', foreign_keys=[receiver_id], backref='received_requests')
 
-# class Page(db.Model):
-#     id = db.Column(db.Integer, primary_key=True)
-#     title = db.Column(db.String(200), nullable=False)
-#     content = db.Column(db.Text, nullable=False)
-#     slug = db.Column(db.String(200), unique=True, nullable=False)
+#TESTING FOR PAYMENT - DO NOT DELETE
+    # 4242 4242 4242 4242
+    # 12/34
+    # 123

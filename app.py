@@ -44,6 +44,7 @@ from routes.course_routes import create_course_routes
 from routes.message_routes import create_message_routes
 from routes.connection_routes import create_connection_routes
 from routes.search_routes import create_search_routes
+from routes.payment_routes import payment_bp
 # Register Blueprints
 app.register_blueprint(create_user_routes(auth), url_prefix="/users")
 app.register_blueprint(create_org_routes(auth), url_prefix="/orgs")
@@ -52,10 +53,13 @@ app.register_blueprint(create_course_routes(auth), url_prefix="/courses")
 app.register_blueprint(create_message_routes(auth), url_prefix="/messages")  # Pass auth here
 app.register_blueprint(create_connection_routes(auth), url_prefix="/connections")
 app.register_blueprint(create_search_routes(auth), url_prefix="/search")
+app.register_blueprint(payment_bp, url_prefix="/payment")
 # import sys
-# print("\n*** URL MAP ***")
+# print("\n*** URL MAP ***", file=sys.stderr)
 # print(app.url_map, file=sys.stderr)
 # print("*** END URL MAP ***\n", file=sys.stderr)
-# Run the app
+
+if not stripe.api_key:
+    raise RuntimeError("Stripe secret key not set. Check your .env file!")
 if __name__ == "__main__":
     app.run(port=3001)
