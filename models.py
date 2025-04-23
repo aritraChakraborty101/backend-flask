@@ -11,6 +11,8 @@ class User(db.Model):
     courses_enrolled = db.Column(db.Text)  # JSON string
     contributions = db.Column(db.Integer, default=0)
     is_banned = db.Column(db.Boolean, default=False)
+    def __repr__(self):
+        return f"<User {self.email}>"
 
 class RoleRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -102,3 +104,17 @@ class Message(db.Model):
 
     sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
     receiver = db.relationship('User', foreign_keys=[receiver_id], backref='received_messages')
+
+class ConnectionRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    requester_id = db.Column(db.String(255), db.ForeignKey('user.propel_user_id'), nullable=False)
+    receiver_id = db.Column(db.String(255), db.ForeignKey('user.propel_user_id'), nullable=False)
+    status = db.Column(db.String(20), default='pending')  # pending, accepted, rejected
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    requester = db.relationship('User', foreign_keys=[requester_id], backref='connection_requests')
+    receiver = db.relationship('User', foreign_keys=[receiver_id], backref='received_requests')
+
+#TESTING FOR PAYMENT - DO NOT DELETE
+    # 4242 4242 4242 4242
+    # 12/34
+    # 123
