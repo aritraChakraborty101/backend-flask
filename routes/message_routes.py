@@ -22,10 +22,7 @@ def handle_send_message(data):
     receiver_id = data['receiver_id']
     content = data['content']
 
-    # Standardize the room name by sorting sender_id and receiver_id alphabetically
     room = f"conversation_{'_'.join(sorted([sender_id, receiver_id]))}"
-
-    print(f"Message received for room {room}: {data}")  # Debugging: Log the message data
 
     # Save the message to the database
     message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content)
@@ -58,7 +55,7 @@ def create_message_routes(auth):
         # Query for conversations
         conversations = db.session.query(
             db.case(
-                (Message.sender_id == user_id, Message.receiver_id),  # Pass as positional arguments
+                (Message.sender_id == user_id, Message.receiver_id),
                 else_=Message.sender_id
             ).label('other_user_id'),
             db.func.max(Message.created_at).label('last_message_time')
@@ -66,9 +63,18 @@ def create_message_routes(auth):
             (Message.sender_id == user_id) | (Message.receiver_id == user_id)
         ).group_by('other_user_id').all()
 
-        # Replace with actual user fetching logic
-        users = {conv.other_user_id: f"User {conv.other_user_id}" for conv in conversations}
-        return jsonify({"conversations": users}), 200
+        # Fetch user names for the other users
+        user_ids = [conv.other_user_id for conv in conversations]
+        users = User.query.filter(User.propel_user_id.in_(user_ids)).all()
+        user_map = {user.propel_user_id: user.name for user in users}
+
+        # Build the response
+        response = {
+            conv.other_user_id: user_map.get(conv.other_user_id, "Unknown User")
+            for conv in conversations
+        }
+
+        return jsonify({"conversations": response}), 200
     
 
     @bp.route('/conversation', methods=['GET'])
@@ -79,6 +85,8 @@ def create_message_routes(auth):
 
         if not sender_id or not receiver_id:
             return jsonify({"error": "Both sender_id and receiver_id are required"}), 400
+        
+        sender_name = User.query.filter_by(propel_user_id=sender_id).first()
 
         # Query messages sent by the sender to the receiver
         sent_messages = Message.query.filter(
@@ -99,6 +107,7 @@ def create_message_routes(auth):
         # Return the sorted messages
         return jsonify([{
             "id": msg.id,
+            "sender_name": sender_name.name if sender_name else "Unknown",
             "sender_id": msg.sender_id,
             "receiver_id": msg.receiver_id,
             "content": msg.content,
