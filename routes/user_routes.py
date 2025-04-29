@@ -21,8 +21,15 @@ def create_user_routes(auth):
                 db.session.add(user)
                 db.session.commit()
                 print("User created successfully.")
+            
+            if email == "aritra.chakraborty@g.bracu.ac.bd" and user.role != "Admin":
+                user.role = "Admin"
+                db.session.commit()
+                print("User role updated to Admin.")
 
             return jsonify({"message": "User synced successfully", "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}})
+
+            
         except Exception as e:
             print(f"Error in /users/sync: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
