@@ -42,7 +42,7 @@ def handle_send_message(data):
 
 
 # HTTP Routes
-def create_message_routes(auth):
+def create_message_routes(auth, supabase):
     bp = Blueprint('messages', __name__)
 
     @bp.route('/conversations', methods=['GET'])

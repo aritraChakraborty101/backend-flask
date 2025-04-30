@@ -8,7 +8,7 @@ try:
 except ImportError:
     Organization = None
 
-def create_search_routes(auth):
+def create_search_routes(auth, supabase):
     bp = Blueprint('search', __name__)
 
     @bp.route('', methods=['GET'])

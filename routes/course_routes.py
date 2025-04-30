@@ -3,7 +3,7 @@ from models import db, Course, Post, Comment, User, Vote
 from propelauth_flask import current_user
 from datetime import datetime
 
-def create_course_routes(auth):
+def create_course_routes(auth, supabase):
     bp = Blueprint("course_routes", __name__)
 
     #add course

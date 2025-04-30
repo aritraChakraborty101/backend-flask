@@ -24,7 +24,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def create_note_routes(auth):
+def create_note_routes(auth, supabase):
     bp = Blueprint("note_routes", __name__)
     # Enable CORS for this blueprint
     CORS(bp, supports_credentials=True)

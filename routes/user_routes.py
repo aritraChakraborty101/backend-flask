@@ -1,9 +1,10 @@
 from flask import Blueprint, request, jsonify
 from propelauth_flask import current_user
-from models import db, User, RoleRequest, UserReport
+# from models import db, User, RoleRequest, UserReport
 
-def create_user_routes(auth):
+def create_user_routes(auth, supabase):
     bp = Blueprint("user_routes", __name__)
+
     @bp.route("/sync", methods=["POST"])
     def sync_user():
         try:
@@ -13,108 +14,134 @@ def create_user_routes(auth):
             email = data.get("email")
             name = data.get("name")
             print(f"Extracted user info: ID={propel_user_id}, Email={email}, Name={name}")
-            # Check if user exists
-            user = User.query.filter_by(propel_user_id=propel_user_id).first()
+
+            # Check if user exists in Supabase
+            response = supabase.table("user").select("*").eq("propel_user_id", propel_user_id).execute()
+            user = response.data
+
             if not user:
-                print("User not found in database. Creating new user...")
-                user = User(propel_user_id=propel_user_id, email=email, name=name)
-                db.session.add(user)
-                db.session.commit()
+                print("User not found in Supabase. Creating new user...")
+                supabase.table("user").insert({
+                    "propel_user_id": propel_user_id,
+                    "email": email,
+                    "name": name,
+                    "role": "General"
+                }).execute()
                 print("User created successfully.")
-            
-            if email == "aritra.chakraborty@g.bracu.ac.bd" and user.role != "Admin":
-                user.role = "Admin"
-                db.session.commit()
+            else:
+                print("User already exists in Supabase.")
+
+            # Update role if the user is an admin
+            if email == "aritra.chakraborty@g.bracu.ac.bd" and user[0]["role"] != "Admin":
+                supabase.table("user").update({"role": "Admin"}).eq("propel_user_id", propel_user_id).execute()
                 print("User role updated to Admin.")
 
-            return jsonify({"message": "User synced successfully", "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}})
-
-            
+            return jsonify({"message": "User synced successfully"}), 200
         except Exception as e:
             print(f"Error in /users/sync: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-        
+
     @bp.route("/info", methods=["GET"])
     @auth.require_user
     def user_info():
-        """Display user information"""
-        propel_user_id = current_user.user_id
-        user = User.query.filter_by(propel_user_id=propel_user_id).first()
-        if not user:
-            return jsonify({"error": "User not found"}), 404
+        try:
+            propel_user_id = current_user.user_id
 
-        return jsonify({
-            "name": user.name,
-            "email": user.email,
-            "role": user.role,
-            "courses_enrolled": user.courses_enrolled,
-            "contributions": user.contributions
-        })
+            # Fetch user info from Supabase
+            response = supabase.table("user").select("*").eq("propel_user_id", propel_user_id).execute()
+            user = response.data
+
+            if not user:
+                return jsonify({"error": "User not found"}), 404
+
+            user = user[0]  # Supabase returns a list of results
+            return jsonify({
+                "name": user["name"],
+                "email": user["email"],
+                "role": user["role"],
+                "courses_enrolled": user["courses_enrolled"],
+                "contributions": user["contributions"]
+            }), 200
+        except Exception as e:
+            print(f"Error in /users/info: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+    
     @bp.route("/request_role", methods=["POST"])
     @auth.require_user
     def request_role():
-        data = request.get_json()
-        requested_role = data.get("requested_role")
-        user_id = current_user.user_id
+        try:
+            data = request.get_json()
+            requested_role = data.get("requested_role")
+            user_id = current_user.user_id
 
-        # Check if a request already exists
-        existing_request = RoleRequest.query.filter_by(user_id=user_id, status="pending").first()
-        if existing_request:
-            return jsonify({"error": "You already have a pending role request"}), 400
+            # Check if a request already exists
+            response = supabase.table("role_request").select("*").eq("user_id", user_id).eq("status", "pending").execute()
+            existing_request = response.data
 
-        # Create a new role request
-        role_request = RoleRequest(user_id=user_id, requested_role=requested_role)
-        db.session.add(role_request)
-        db.session.commit()
+            if existing_request:
+                return jsonify({"error": "You already have a pending role request"}), 400
 
-        return jsonify({"message": "Role request submitted successfully"}), 200
-    
+            # Create a new role request
+            supabase.table("role_request").insert({
+                "user_id": user_id,
+                "requested_role": requested_role,
+                "status": "pending"
+            }).execute()
+
+            return jsonify({"message": "Role request submitted successfully"}), 200
+        except Exception as e:
+            print(f"Error in /request_role: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
+
+
     @bp.route("/role_requests", methods=["GET"])
     @auth.require_user
     def get_role_requests():
         try:
-            # Fetch the user's role from the database
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
-            print(f"Current User ID: {user.id}")
+            # Fetch the user's role from Supabase
+            response = supabase.table("user").select("role").eq("propel_user_id", current_user.user_id).execute()
+            user = response.data
+
             if not user:
-                print("User not found in the database")
                 return jsonify({"error": "User not found"}), 404
 
+            user_role = user[0]["role"]
+
             # Ensure the user is a Moderator or Admin
-            print(f"Current User Role: {user.role}")
-            if user.role not in ["Moderator", "Admin"]:
-                print("Unauthorized access attempt")
+            if user_role not in ["Moderator", "Admin"]:
                 return jsonify({"error": "Unauthorized"}), 403
 
             # Get all pending role requests
-            role_requests = RoleRequest.query.filter_by(status="pending").all()
-            print(f"Fetched {len(role_requests)} pending role requests")
-            return jsonify([{
-                "id": req.id,
-                "user_id": req.user_id,
-                "requested_role": req.requested_role,
-                "status": req.status
-            } for req in role_requests])
+            response = supabase.table("role_request").select("*").eq("status", "pending").execute()
+            role_requests = response.data
+
+            return jsonify(role_requests), 200
         except Exception as e:
             print(f"Error in /role_requests: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-    
+
 
     @bp.route("/role_requests/<int:request_id>", methods=["PATCH"])
     @auth.require_user
     def update_role_request(request_id):
         try:
-            # Fetch the user's role from the database
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+            # Fetch the user's role from Supabase
+            response = supabase.table("user").select("role").eq("propel_user_id", current_user.user_id).execute()
+            user = response.data
+
             if not user:
                 return jsonify({"error": "User not found"}), 404
 
+            user_role = user[0]["role"]
+
             # Ensure the user is a Moderator or Admin
-            if user.role not in ["Moderator", "Admin"]:
+            if user_role not in ["Moderator", "Admin"]:
                 return jsonify({"error": "Unauthorized"}), 403
 
             # Get the role request
-            role_request = RoleRequest.query.get(request_id)
+            response = supabase.table("role_request").select("*").eq("id", request_id).execute()
+            role_request = response.data
+
             if not role_request:
                 return jsonify({"error": "Role request not found"}), 404
 
@@ -124,77 +151,68 @@ def create_user_routes(auth):
             if status not in ["approved", "rejected"]:
                 return jsonify({"error": "Invalid status"}), 400
 
-            role_request.status = status
+            # Update the role request in Supabase
+            supabase.table("role_request").update({"status": status}).eq("id", request_id).execute()
+
             if status == "approved":
-                # Fetch the user using the propel_user_id from the role request
-                user_to_update = User.query.filter_by(propel_user_id=role_request.user_id).first()
-                if not user_to_update:
-                    return jsonify({"error": "User to update not found"}), 404
+                # Fetch the user to update their role
+                user_id_to_update = role_request[0]["user_id"]
+                supabase.table("user").update({"role": role_request[0]["requested_role"]}).eq("propel_user_id", user_id_to_update).execute()
 
-                user_to_update.role = role_request.requested_role
-                db.session.commit()
-
-            db.session.commit()
             return jsonify({"message": f"Role request {status} successfully"}), 200
         except Exception as e:
             print(f"Error in update_role_request: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
     
 
-    @bp.route("/users/<int:user_id>/ban", methods=["PATCH"])
-    @auth.require_user
-    def ban_user(user_id):
-        # Fetch the current user's role from the database
-        user = User.query.filter_by(propel_user_id=current_user.user_id).first()
-        if not user:
-            return jsonify({"error": "User not found"}), 404
+    # @bp.route("/users/<int:user_id>/ban", methods=["PATCH"])
+    # @auth.require_user
+    # def ban_user(user_id):
+    #     # Fetch the current user's role from the database
+    #     user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+    #     if not user:
+    #         return jsonify({"error": "User not found"}), 404
 
-        # Ensure the user is a Moderator or Admin
-        if user.role not in ["Moderator", "Admin"]:
-            return jsonify({"error": "Unauthorized"}), 403
+    #     # Ensure the user is a Moderator or Admin
+    #     if user.role not in ["Moderator", "Admin"]:
+    #         return jsonify({"error": "Unauthorized"}), 403
 
-        user_to_ban = User.query.get(user_id)
-        if not user_to_ban:
-            return jsonify({"error": "User not found"}), 404
+    #     user_to_ban = User.query.get(user_id)
+    #     if not user_to_ban:
+    #         return jsonify({"error": "User not found"}), 404
 
-        user_to_ban.is_banned = True
-        db.session.commit()
-        return jsonify({"message": "User banned successfully"}), 200
+    #     user_to_ban.is_banned = True
+    #     db.session.commit()
+    #     return jsonify({"message": "User banned successfully"}), 200
     
 
     @bp.route("/all_users", methods=["GET"])
     def get_all_users():
         try:
-            # Fetch all users from the database
-            users = User.query.all()
-            user_list = [
-                {
-                    "prope_user_id": user.propel_user_id,
-                    "name": user.name,
-                    "email": user.email,  # Include only if email is public
-                }
-                for user in users
-            ]
-            return jsonify(user_list), 200
+            # Fetch all users from Supabase
+            response = supabase.table("user").select("propel_user_id, name, email").execute()
+            users = response.data
+
+            if not users:
+                return jsonify({"error": "No users found"}), 404
+
+            return jsonify(users), 200
         except Exception as e:
             print(f"Error fetching all users: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
+        
     
-    @bp.route("/public_profile/<string:prope_user_id>", methods=["GET"])
-    def get_public_profile(prope_user_id):
+    @bp.route("/public_profile/<string:propel_user_id>", methods=["GET"])
+    def get_public_profile(propel_user_id):
         try:
             # Fetch the user by their PropelAuth user ID
-            user = User.query.filter_by(propel_user_id=prope_user_id).first()
+            response = supabase.table("user").select("name, email, contributions").eq("propel_user_id", propel_user_id).execute()
+            user = response.data
+
             if not user:
                 return jsonify({"error": "User not found"}), 404
 
-            # Return only public information
-            public_profile = {
-                "name": user.name,
-                "email": user.email,  # Include only if email is public
-                "contributions": user.contributions,  # Example: public contributions
-            }
-            return jsonify(public_profile), 200
+            return jsonify(user[0]), 200
         except Exception as e:
             print(f"Error fetching public profile: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
@@ -206,56 +224,67 @@ def create_user_routes(auth):
         try:
             data = request.get_json()
             reported_user_id = data.get("reported_user_id")
-            reporter_user_id = data.get("reporter_user_id")  # Get reporter ID from the request
+            reporter_user_id = current_user.user_id  # Get reporter ID from the current user
             issue = data.get("issue")
 
-            if not reported_user_id or not reporter_user_id or not issue:
-                return jsonify({"error": "Reported user ID, reporter user ID, and issue are required"}), 400
+            if not reported_user_id or not issue:
+                return jsonify({"error": "Reported user ID and issue are required"}), 400
 
-            # Fetch the reporter and reported user from the database
-            reporter_user = User.query.filter_by(propel_user_id=reporter_user_id).first()
-            reported_user = User.query.filter_by(propel_user_id=reported_user_id).first()
+            # Check if the reported and reporter users exist in Supabase
+            reported_user = supabase.table("user").select("*").eq("propel_user_id", reported_user_id).execute().data
+            reporter_user = supabase.table("user").select("*").eq("propel_user_id", reporter_user_id).execute().data
 
-            if not reporter_user or not reported_user:
+            if not reported_user or not reporter_user:
                 return jsonify({"error": "Invalid user IDs"}), 404
 
-            # Create a new report
-            report = UserReport(
-                reported_user_id=reported_user.id,
-                reporter_user_id=reporter_user.id,
-                issue=issue
-            )
-            db.session.add(report)
-            db.session.commit()
+            # Create a new report in Supabase
+            supabase.table("user_report").insert({
+                "reported_user_id": reported_user_id,
+                "reporter_user_id": reporter_user_id,
+                "issue": issue,
+                "status": "pending"
+            }).execute()
 
             return jsonify({"message": "Report submitted successfully!"}), 201
         except Exception as e:
             print(f"Error reporting user: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-    
+
 
     @bp.route("/reports", methods=["GET"])
     @auth.require_user
     def get_reports():
         try:
-            reports = UserReport.query.all()
-            report_list = [
-                {
-                    "id": report.id,
-                    "reported_user": User.query.get(report.reported_user_id).name,
-                    "reporter_user": User.query.get(report.reporter_user_id).name,
-                    "issue": report.issue,
-                    "status": report.status,
-                    "created_at": report.created_at,
-                }
-                for report in reports
-            ]
+            # Fetch all reports from Supabase
+            response = supabase.table("user_report").select("*").execute()
+            reports = response.data
+
+            if not reports:
+                return jsonify({"error": "No reports found"}), 404
+
+            # Fetch user details for each report
+            report_list = []
+            for report in reports:
+                reported_user = supabase.table("user").select("name").eq("propel_user_id", report["reported_user_id"]).execute().data
+                reporter_user = supabase.table("user").select("name").eq("propel_user_id", report["reporter_user_id"]).execute().data
+
+                if report["status"] != "pending":
+                    continue
+                report_list.append({
+                    "id": report["id"],
+                    "reported_user": reported_user[0]["name"] if reported_user else "Unknown",
+                    "reporter_user": reporter_user[0]["name"] if reporter_user else "Unknown",
+                    "issue": report["issue"],
+                    "status": report["status"],
+                    "created_at": report["created_at"]
+                })
+
             return jsonify(report_list), 200
         except Exception as e:
             print(f"Error fetching reports: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-        
-    
+
+
     @bp.route("/resolve_report/<int:report_id>", methods=["PATCH"])
     @auth.require_user
     def resolve_report(report_id):
@@ -263,88 +292,47 @@ def create_user_routes(auth):
             data = request.get_json()
             action = data.get("action")  # "ban" or "reject"
 
-            # Fetch the report from the database
-            report = UserReport.query.get(report_id)
+            # Fetch the report from Supabase
+            response = supabase.table("user_report").select("*").eq("id", report_id).execute()
+            report = response.data
+
             if not report:
                 return jsonify({"error": "Report not found"}), 404
 
+            report = report[0]  # Supabase returns a list of results
+
             if action == "ban":
                 # Ban the reported user
-                reported_user = User.query.get(report.reported_user_id)
-                if not reported_user:
-                    return jsonify({"error": "Reported user not found"}), 404
-                reported_user.is_banned = True
-                report.status = "resolved"
+                supabase.table("user").update({"is_banned": True}).eq("propel_user_id", report["reported_user_id"]).execute()
+                supabase.table("user_report").update({"status": "resolved"}).eq("id", report_id).execute()
             elif action == "reject":
                 # Reject the report
-                report.status = "rejected"
+                supabase.table("user_report").update({"status": "rejected"}).eq("id", report_id).execute()
             else:
                 return jsonify({"error": "Invalid action"}), 400
 
-            # Commit the changes to the user or report status
-            db.session.commit()
-
-            # Delete the report from the database
-            db.session.delete(report)
-            db.session.commit()
-
-            return jsonify({"message": "Report resolved and deleted successfully!"}), 200
+            return jsonify({"message": "Report resolved successfully!"}), 200
         except Exception as e:
             print(f"Error resolving report: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-
-
-    # @bp.route("/users/<int:user_id>", methods=["DELETE"])
-    # @auth.require_user
-    # def delete_user(user_id):
-    #     if current_user.role != "Admin":
-    #         return jsonify({"error": "Unauthorized"}), 403
-
-    #     user = User.query.get(user_id)
-    #     if not user:
-    #         return jsonify({"error": "User not found"}), 404
-
-    #     db.session.delete(user)
-    #     db.session.commit()
-    #     return jsonify({"message": "User deleted successfully"}), 200
     
 
     @bp.route("/get_role", methods=["GET"])
     @auth.require_user
     def get_role():
-        user_id = current_user.user_id  # Get the user's ID from PropelAuth
-        user = User.query.filter_by(propel_user_id=user_id).first()
-        if request.method == "OPTIONS":
-            return jsonify({"message": "Preflight response"}), 200
-        
-
-
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-
-        return jsonify({"role": user.role}), 200
-
-
-    @bp.route("/update_name", methods=["PATCH"])
-    @auth.require_user
-    def update_name():
         try:
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+            propel_user_id = current_user.user_id
+
+            # Fetch user role from Supabase
+            response = supabase.table("user").select("role").eq("propel_user_id", propel_user_id).execute()
+            user = response.data
+
             if not user:
                 return jsonify({"error": "User not found"}), 404
 
-            data = request.get_json()
-            new_name = data.get("name")
-            if not new_name:
-                return jsonify({"error": "Name is required"}), 400
-
-            user.name = new_name
-            db.session.commit()
-
-            return jsonify({"message": "Name updated successfully!"}), 200
+            return jsonify({"role": user[0]["role"]}), 200
         except Exception as e:
-            print(f"Error updating name: {e}")
+            print(f"Error in /users/get_role: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-
 
     return bp
