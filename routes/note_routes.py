@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_cors import CORS
-from models import db, Note, User, NoteVote, NoteReport, NoteComment
+from datetime import datetime
 from propelauth_flask import current_user
 import os
 from werkzeug.utils import secure_filename
@@ -45,58 +45,69 @@ def create_note_routes(auth, supabase):
             if not allowed_file(file.filename):
                 return jsonify({"error": "Only PDF files are allowed"}), 400
 
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+            # Check if the user exists
+            user = supabase.table("user").select("*").eq("propel_user_id", current_user.user_id).execute().data
             if not user:
                 return jsonify({"error": "User not found"}), 404
-            if user.is_banned:
+            user = user[0]
+            if user.get("is_banned"):
                 return jsonify({"error": "Banned users cannot upload notes"}), 403
 
+            # Upload the file to Cloudinary
             upload_result = cloudinary.uploader.upload(file, resource_type="raw", folder=f"courses/{course_id}")
             file_url = upload_result.get("secure_url")
 
-            note = Note(
-                course_id=course_id,
-                user_id=user.id,
-                title=title,
-                content=file_url,
-                category_tags=json.dumps(tags),
-                status="pending"
-            )
-            db.session.add(note)
+            # Insert the note into Supabase
+            note_data = {
+                "course_id": course_id,
+                "user_id": user["id"],
+                "title": title,
+                "content": file_url,
+                "category_tags": json.dumps(tags),
+                "status": "pending",
+                "helpful_votes": 0,
+                "unhelpful_votes": 0,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            supabase.table("note").insert(note_data).execute()
 
-            if not user.contributions:
-                user.contributions = 0
-            user.contributions += 1
-            db.session.commit()
+            # Update the user's contributions
+            contributions = user.get("contributions", 0) + 1
+            supabase.table("user").update({"contributions": contributions}).eq("id", user["id"]).execute()
 
             return jsonify({
                 "message": "Note uploaded successfully and pending review",
-                "note_id": note.id,
                 "file_url": file_url
             }), 201
-
         except Exception as e:
             print(f"Error uploading note: {e}")
-            db.session.rollback()
             return jsonify({"error": "Internal Server Error"}), 500
 
     @bp.route("/<int:course_id>", methods=["GET"])
     def fetch_notes(course_id):
         try:
-            notes = Note.query.filter_by(course_id=course_id, status="approved").all()
+            # Fetch all approved notes for the course
+            notes = supabase.table("note").select("*").eq("course_id", course_id).eq("status", "approved").execute().data
 
-            note_list = [{
-                "id": note.id,
-                "title": note.title,
-                "file_url": note.content,  # Cloudinary URL
-                "author": note.user.name,
-                "tags": json.loads(note.category_tags or "[]"),
-                "created_at": note.created_at.isoformat(),
-                "user_id": note.user_id,
-                "helpful_votes": note.helpful_votes,  # Upvotes
-                "unhelpful_votes": note.unhelpful_votes,  # Downvotes
-                "propel_user_id": note.user.propel_user_id
-            } for note in notes]
+            note_list = []
+            for note in notes:
+                user = supabase.table("user").select("name", "propel_user_id").eq("id", note["user_id"]).execute().data
+                author_name = user[0]["name"] if user else "Unknown"
+                propel_user_id = user[0]["propel_user_id"] if user else "Unknown"
+                
+
+                note_list.append({
+                    "id": note["id"],
+                    "title": note["title"],
+                    "file_url": note["content"],
+                    "author": author_name,
+                    "tags": json.loads(note["category_tags"] or "[]"),
+                    "created_at": note["created_at"],
+                    "user_id": propel_user_id,
+                    "helpful_votes": note["helpful_votes"],
+                    "unhelpful_votes": note["unhelpful_votes"]
+                })
+
             return jsonify(note_list), 200
         except Exception as e:
             print(f"Error fetching notes: {e}")
@@ -105,21 +116,27 @@ def create_note_routes(auth, supabase):
     @bp.route("/<int:course_id>/<int:note_id>", methods=["GET"])
     def fetch_note(course_id, note_id):
         try:
-            note = Note.query.filter_by(course_id=course_id, id=note_id, status="approved").first()
+            # Fetch the note
+            note = supabase.table("note").select("*").eq("course_id", course_id).eq("id", note_id).eq("status", "approved").execute().data
             if not note:
                 return jsonify({"error": "Note not found"}), 404
+            note = note[0]
+
+            # Fetch the author's name
+            user = supabase.table("user").select("name").eq("id", note["user_id"]).execute().data
+            author_name = user[0]["name"] if user else "Unknown"
             
-            
+
             return jsonify({
-                "id": note.id,
-                "title": note.title,
-                "file_url": note.content,
-                "author": note.user.name,
-                "tags": json.loads(note.category_tags or "[]"),
-                "created_at": note.created_at.isoformat(),
-                "user_id": note.user_id,
-                "helpful_votes": note.helpful_votes,  # Upvotes
-                "unhelpful_votes": note.unhelpful_votes  # Downvotes
+                "id": note["id"],
+                "title": note["title"],
+                "file_url": note["content"],
+                "author": author_name,
+                "tags": json.loads(note["category_tags"] or "[]"),
+                "created_at": note["created_at"],
+                "user_id": note["user_id"],
+                "helpful_votes": note["helpful_votes"],
+                "unhelpful_votes": note["unhelpful_votes"]
             }), 200
         except Exception as e:
             print(f"Error fetching note: {e}")
@@ -131,45 +148,65 @@ def create_note_routes(auth, supabase):
         try:
             data = request.get_json()
             vote_type = data.get("vote_type")
-            voter_id = data.get("user_id")
+            voter_id = current_user.user_id
 
             if vote_type not in ["upvote", "downvote"]:
                 return jsonify({"error": "Invalid vote type."}), 400
 
-            note = Note.query.get(note_id)
+            # Fetch the note
+            note = supabase.table("note").select("*").eq("id", note_id).execute().data
             if not note:
                 return jsonify({"error": "Note not found"}), 404
+            note = note[0]
 
-            existing = NoteVote.query.filter_by(note_id=note_id, user_id=voter_id).first()
-            if existing:
-                if existing.vote_type == vote_type:
-                    db.session.delete(existing)
-                    if vote_type == "upvote": note.helpful_votes = max(note.helpful_votes - 1, 0)
-                    else: note.unhelpful_votes = max(note.unhelpful_votes - 1, 0)
-                    message = f"{vote_type.capitalize()} canceled"
-                else:
-                    prev = existing.vote_type
-                    existing.vote_type = vote_type
+            # Check if the user has already voted
+            existing_vote = supabase.table("note_vote").select("*").eq("note_id", note_id).eq("user_id", voter_id).execute().data
+            if existing_vote:
+                existing_vote = existing_vote[0]
+                if existing_vote["vote_type"] == vote_type:
+                    # Cancel the vote
+                    supabase.table("note_vote").delete().eq("id", existing_vote["id"]).execute()
                     if vote_type == "upvote":
-                        note.helpful_votes += 1
-                        note.unhelpful_votes = max(note.unhelpful_votes - 1, 0)
+                        new_helpful_votes = max(0, note["helpful_votes"] - 1)
+                        supabase.table("note").update({"helpful_votes": new_helpful_votes}).eq("id", note_id).execute()
                     else:
-                        note.unhelpful_votes += 1
-                        note.helpful_votes = max(note.helpful_votes - 1, 0)
-                    message = f"Vote changed from {prev} to {vote_type}"
-                db.session.commit()
-                return jsonify({"message": message}), 200
+                        new_unhelpful_votes = max(0, note["unhelpful_votes"] - 1)
+                        supabase.table("note").update({"unhelpful_votes": new_unhelpful_votes}).eq("id", note_id).execute()
+                    return jsonify({"message": f"{vote_type.capitalize()} canceled"}), 200
+                else:
+                    # Change the vote type
+                    supabase.table("note_vote").update({"vote_type": vote_type}).eq("id", existing_vote["id"]).execute()
+                    if vote_type == "upvote":
+                        new_helpful_votes = note["helpful_votes"] + 1
+                        new_unhelpful_votes = max(0, note["unhelpful_votes"] - 1)
+                        supabase.table("note").update({"helpful_votes": new_helpful_votes, "unhelpful_votes": new_unhelpful_votes}).eq("id", note_id).execute()
+                    else:
+                        new_unhelpful_votes = note["unhelpful_votes"] + 1
+                        new_helpful_votes = max(0, note["helpful_votes"] - 1)
+                        supabase.table("note").update({"unhelpful_votes": new_unhelpful_votes, "helpful_votes": new_helpful_votes}).eq("id", note_id).execute()
+                    return jsonify({"message": f"Vote changed to {vote_type}"}), 200
 
-            new_vote = NoteVote(note_id=note_id, user_id=voter_id, vote_type=vote_type)
-            db.session.add(new_vote)
-            if vote_type == "upvote": note.helpful_votes += 1
-            else: note.unhelpful_votes += 1
-            db.session.commit()
+            # Add a new vote
+            supabase.table("note_vote").insert({
+                "note_id": note_id,
+                "user_id": voter_id,
+                "vote_type": vote_type,
+                "created_at": datetime.utcnow().isoformat()
+            }).execute()
+
+            # Update the vote counts
+            if vote_type == "upvote":
+                new_helpful_votes = note["helpful_votes"] + 1
+                supabase.table("note").update({"helpful_votes": new_helpful_votes}).eq("id", note_id).execute()
+            else:
+                new_unhelpful_votes = note["unhelpful_votes"] + 1
+                supabase.table("note").update({"unhelpful_votes": new_unhelpful_votes}).eq("id", note_id).execute()
+
             return jsonify({"message": f"Note {vote_type}d successfully"}), 201
         except Exception as e:
             print(f"Error voting: {e}")
-            db.session.rollback()
             return jsonify({"error": "Internal Server Error"}), 500
+
 
     @bp.route("/<int:note_id>/comments", methods=["POST"])
     @auth.require_user
@@ -177,39 +214,53 @@ def create_note_routes(auth, supabase):
         try:
             data = request.get_json()
             content = data.get("content")
-            user_id = data.get("user_id")  # Get user_id from the request payload
+            user_id = current_user.user_id  # Get the current user's ID
 
             if not content:
                 return jsonify({"error": "Content is required"}), 400
 
-            note = Note.query.get(note_id)
+            # Check if the note exists
+            note = supabase.table("note").select("*").eq("id", note_id).execute().data
             if not note:
                 return jsonify({"error": "Note not found"}), 404
 
-            comment = NoteComment(note_id=note_id, user_id=user_id, content=content)
-            db.session.add(comment)
-            db.session.commit()
-            return jsonify({"message": "Comment added successfully!", "comment_id": comment.id}), 201
+            # Insert the comment into the database
+            supabase.table("note_comment").insert({
+                "note_id": note_id,
+                "user_id": user_id,
+                "content": content,
+                "created_at": datetime.utcnow().isoformat()
+            }).execute()
+
+            return jsonify({"message": "Comment added successfully!"}), 201
         except Exception as e:
-            print(f"Error adding comment: {e}")
-            db.session.rollback()
+            print(f"Error creating comment: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
 
     @bp.route("/<int:note_id>/comments", methods=["GET"])
     def get_note_comments(note_id):
         try:
-            comments = NoteComment.query.filter_by(note_id=note_id).order_by(NoteComment.created_at.asc()).all()
-            out = []
-            for c in comments:
-                user_obj = User.query.filter_by(propel_user_id=c.user_id).first()
-                out.append({
-                    "id": c.id,
-                    "user_id": c.user_id,
-                    "author": user_obj.name if user_obj else "Unknown",
-                    "content": c.content,
-                    "created_at": c.created_at.isoformat()
+            # Fetch all comments for the note
+            comments = supabase.table("note_comment").select("*").eq("note_id", note_id).order("created_at", desc=False).execute().data
+
+            # if not comments:
+            #     return jsonify({"error": "No comments found"}), 404
+
+            # Fetch user details for each comment
+            comments_data = []
+            for comment in comments:
+                user = supabase.table("user").select("name").eq("propel_user_id", comment["user_id"]).execute().data
+                author_name = user[0]["name"] if user else "Unknown"
+
+                comments_data.append({
+                    "id": comment["id"],
+                    "user_id": comment["user_id"],
+                    "author": author_name,
+                    "content": comment["content"],
+                    "created_at": comment["created_at"]
                 })
-            return jsonify(out), 200
+
+            return jsonify(comments_data), 200
         except Exception as e:
             print(f"Error fetching comments: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
@@ -218,64 +269,49 @@ def create_note_routes(auth, supabase):
     @auth.require_user
     def delete_note_comment(note_id, comment_id):
         try:
-            print(f"Attempting delete comment {comment_id} on note {note_id} by user {current_user.user_id}")
-            comment = NoteComment.query.filter_by(id=comment_id, note_id=note_id).first()
+            # Fetch the comment
+            comment = supabase.table("note_comment").select("*").eq("id", comment_id).eq("note_id", note_id).execute().data
             if not comment:
-                print("Comment not found")
                 return jsonify({"error": "Comment not found"}), 404
+            comment = comment[0]
 
-            user_obj = User.query.filter_by(propel_user_id=current_user.user_id).first()
-            if not user_obj:
-                print("User not found")
+            # Ensure the user is the author of the comment or an admin
+            user = supabase.table("user").select("*").eq("propel_user_id", current_user.user_id).execute().data
+            if not user:
                 return jsonify({"error": "User not found"}), 404
-
-            if str(comment.user_id) != current_user.user_id and user_obj.role != "Admin":
-                print(f"Unauthorized delete by {current_user.user_id}")
+            user = user[0]
+            if str(comment["user_id"]) != str(user["propel_user_id"]) and user["role"] != "Admin":
                 return jsonify({"error": "Unauthorized to delete this comment"}), 403
 
-            db.session.delete(comment)
-            db.session.commit()
-            print(f"Comment {comment_id} deleted successfully")
+            # Delete the comment
+            supabase.table("note_comment").delete().eq("id", comment_id).execute()
 
-            # Return updated comments list
-            updated_comments = NoteComment.query.filter_by(note_id=note_id).order_by(NoteComment.created_at.asc()).all()
-            comments_data = []
-            for c in updated_comments:
-                usr = User.query.filter_by(propel_user_id=c.user_id).first()
-                comments_data.append({
-                    "id": c.id,
-                    "user_id": c.user_id,
-                    "author": usr.name if usr else "Unknown",
-                    "content": c.content,
-                    "created_at": c.created_at.isoformat()
-                })
-            return jsonify({"message": "Comment deleted successfully", "comments": comments_data}), 200
-
+            return jsonify({"message": "Comment deleted successfully!"}), 200
         except Exception as e:
             print(f"Error deleting comment: {e}")
-            db.session.rollback()
             return jsonify({"error": "Internal Server Error"}), 500
 
-    @bp.route("/<int:note_id>/report", methods=["POST"])
-    @auth.require_user
-    def report_note(note_id):
-        try:
-            data = request.get_json()
-            reporter_id = data.get("reporter_user_id")
-            reason = data.get("reason")
-            if not reason:
-                return jsonify({"error": "Report reason required"}), 400
-            note = Note.query.get(note_id)
-            if not note:
-                return jsonify({"error": "Note not found"}), 404
-            report = NoteReport(note_id=note_id, reporter_user_id=reporter_id, reason=reason)
-            db.session.add(report)
-            db.session.commit()
-            return jsonify({"message": "Note reported successfully", "report_id": report.id}), 201
-        except Exception as e:
-            print(f"Error reporting note: {e}")
-            db.session.rollback()
-            return jsonify({"error": "Internal Server Error"}), 500
+
+    # @bp.route("/<int:note_id>/report", methods=["POST"])
+    # @auth.require_user
+    # def report_note(note_id):
+    #     try:
+    #         data = request.get_json()
+    #         reporter_id = data.get("reporter_user_id")
+    #         reason = data.get("reason")
+    #         if not reason:
+    #             return jsonify({"error": "Report reason required"}), 400
+    #         note = Note.query.get(note_id)
+    #         if not note:
+    #             return jsonify({"error": "Note not found"}), 404
+    #         report = NoteReport(note_id=note_id, reporter_user_id=reporter_id, reason=reason)
+    #         db.session.add(report)
+    #         db.session.commit()
+    #         return jsonify({"message": "Note reported successfully", "report_id": report.id}), 201
+    #     except Exception as e:
+    #         print(f"Error reporting note: {e}")
+    #         db.session.rollback()
+    #         return jsonify({"error": "Internal Server Error"}), 500
         
 
 
@@ -286,21 +322,22 @@ def create_note_routes(auth, supabase):
     def review_notes():
         try:
             # Ensure the user is an admin
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
-            if not user or user.role != "Admin":
+            user = supabase.table("user").select("*").eq("propel_user_id", current_user.user_id).execute().data
+            if not user or user[0]["role"] != "Admin":
                 return jsonify({"error": "Unauthorized"}), 403
 
             # Fetch all pending notes
-            notes = Note.query.filter_by(status="pending").all()
+            notes = supabase.table("note").select("*").eq("status", "pending").execute().data
+
             note_list = [
                 {
-                    "id": note.id,
-                    "title": note.title,
-                    "content": note.content,
-                    "author": note.user.name,
-                    "tags": json.loads(note.category_tags or "[]"),
-                    "created_at": note.created_at.isoformat(),
-                    "course_id": note.course_id
+                    "id": note["id"],
+                    "title": note["title"],
+                    "content": note["content"],
+                    "author": supabase.table("user").select("name").eq("id", note["user_id"]).execute().data[0]["name"],
+                    "tags": json.loads(note["category_tags"] or "[]"),
+                    "created_at": note["created_at"],
+                    "course_id": note["course_id"]
                 }
                 for note in notes
             ]
@@ -308,21 +345,21 @@ def create_note_routes(auth, supabase):
         except Exception as e:
             print(f"Error fetching pending notes: {e}")
             return jsonify({"error": "Internal Server Error"}), 500
-        
-    
+
     @bp.route("/review/<int:note_id>", methods=["PATCH"])
     @auth.require_user
     def update_note_status(note_id):
         try:
             # Ensure the user is an admin
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
-            if not user or user.role != "Admin":
+            user = supabase.table("user").select("*").eq("propel_user_id", current_user.user_id).execute().data
+            if not user or user[0]["role"] != "Admin":
                 return jsonify({"error": "Unauthorized"}), 403
 
             # Fetch the note
-            note = Note.query.get(note_id)
+            note = supabase.table("note").select("*").eq("id", note_id).execute().data
             if not note:
                 return jsonify({"error": "Note not found"}), 404
+            note = note[0]
 
             # Get the new status from the request
             data = request.get_json()
@@ -331,61 +368,55 @@ def create_note_routes(auth, supabase):
                 return jsonify({"error": "Invalid status"}), 400
 
             if status == "rejected":
-                # Delete the note from Cloudinary
-                public_id = note.content.split("/")[-1].split(".")[0]  # Extract public_id from the URL
-                cloudinary.uploader.destroy(f"courses/{note.course_id}/{public_id}", resource_type="raw")
+                # Delete the note file from Cloudinary
+                public_id = note["content"].split("/")[-1].split(".")[0]  # Extract public_id from the URL
+                cloudinary.uploader.destroy(f"courses/{note['course_id']}/{public_id}", resource_type="raw")
 
-                # Delete the note from the database
-                db.session.delete(note)
+                # Delete the note from Supabase
+                supabase.table("note").delete().eq("id", note_id).execute()
             else:
                 # Update the note's status to approved
-                note.status = status
+                supabase.table("note").update({"status": status}).eq("id", note_id).execute()
 
-            db.session.commit()
             return jsonify({"message": f"Note {status} successfully"}), 200
         except Exception as e:
             print(f"Error updating note status: {e}")
-            db.session.rollback()
             return jsonify({"error": "Internal Server Error"}), 500
-        
-    
+
     @bp.route("/<int:note_id>", methods=["DELETE"])
     @auth.require_user
     def delete_note(note_id):
         try:
             # Fetch the note
-            note = Note.query.get(note_id)
+            note = supabase.table("note").select("*").eq("id", note_id).execute().data
             if not note:
                 return jsonify({"error": "Note not found"}), 404
+            note = note[0]
 
             # Ensure the user is the owner of the note or an admin
-            user = User.query.filter_by(propel_user_id=current_user.user_id).first()
+            user = supabase.table("user").select("*").eq("propel_user_id", current_user.user_id).execute().data
             if not user:
                 return jsonify({"error": "User not found"}), 404
-            if str(note.user_id) != str(user.id) and user.role != "Admin":
+            user = user[0]
+            if str(note["user_id"]) != str(user["id"]) and user["role"] != "Admin":
                 return jsonify({"error": "Unauthorized to delete this note"}), 403
-            
-            #minus the user's contributions
-            user.contributions -= 1
 
             # Delete associated comments
-            NoteComment.query.filter_by(note_id=note_id).delete()
+            supabase.table("note_comment").delete().eq("note_id", note_id).execute()
 
             # Delete associated votes
-            NoteVote.query.filter_by(note_id=note_id).delete()
+            supabase.table("note_vote").delete().eq("note_id", note_id).execute()
 
             # Delete the note file from Cloudinary
-            public_id = note.content.split("/")[-1].split(".")[0]  # Extract public_id from the URL
-            cloudinary.uploader.destroy(f"courses/{note.course_id}/{public_id}", resource_type="raw")
+            public_id = note["content"].split("/")[-1].split(".")[0]  # Extract public_id from the URL
+            cloudinary.uploader.destroy(f"courses/{note['course_id']}/{public_id}", resource_type="raw")
 
             # Delete the note itself
-            db.session.delete(note)
-            db.session.commit()
+            supabase.table("note").delete().eq("id", note_id).execute()
 
             return jsonify({"message": "Note and all associated data deleted successfully"}), 200
         except Exception as e:
             print(f"Error deleting note: {e}")
-            db.session.rollback()
             return jsonify({"error": "Internal Server Error"}), 500
 
     return bp

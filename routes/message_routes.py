@@ -1,8 +1,15 @@
 from flask_socketio import emit, join_room
 from app import socketio
-from models import Message, db, User
+import os
+# from models import Message, db, User
 from propelauth_flask import current_user
 from flask import Blueprint, request, jsonify
+from supabase import create_client, Client
+
+
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
 @socketio.on('join')
 def handle_join(data):
@@ -25,18 +32,24 @@ def handle_send_message(data):
     room = f"conversation_{'_'.join(sorted([sender_id, receiver_id]))}"
 
     # Save the message to the database
-    message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content)
-    db.session.add(message)
-    db.session.commit()
+    result = supabase.table("message").insert({
+        "sender_id": sender_id,
+        "receiver_id": receiver_id,
+        "content": content,
+        "created_at": "NOW()" 
+    }).execute()
 
-    print(f"Message saved to database: {message.content}")  # Debugging: Log the saved message
+
+    # Extract the saved message
+    saved_message = result.data[0]  # Get the first inserted row
+
 
     # Emit the message to the room
     emit('receive_message', {
-        'sender_id': sender_id,
-        'receiver_id': receiver_id,
-        'content': content,
-        'created_at': message.created_at.isoformat()
+        'sender_id': saved_message["sender_id"],
+        'receiver_id': saved_message["receiver_id"],
+        'content': saved_message["content"],
+        'created_at': saved_message["created_at"]
     }, room=room)
     print(f"Message emitted to room {room}")  # Debugging: Log the emission
 
@@ -48,34 +61,41 @@ def create_message_routes(auth, supabase):
     @bp.route('/conversations', methods=['GET'])
     @auth.require_user
     def get_conversations():
-        user_id = request.args.get('user_id')  # Get user_id from query parameters
-        if not user_id:
-            return jsonify({"error": "User ID is required"}), 400
+        try:
+            user_id = current_user.user_id  # Get the current user's ID
 
-        # Query for conversations
-        conversations = db.session.query(
-            db.case(
-                (Message.sender_id == user_id, Message.receiver_id),
-                else_=Message.sender_id
-            ).label('other_user_id'),
-            db.func.max(Message.created_at).label('last_message_time')
-        ).filter(
-            (Message.sender_id == user_id) | (Message.receiver_id == user_id)
-        ).group_by('other_user_id').all()
+            # Query for conversations where the user is either the sender or receiver
+            messages = supabase.table("message").select("*").or_(
+                f"sender_id.eq.{user_id},receiver_id.eq.{user_id}"
+            ).execute().data
 
-        # Fetch user names for the other users
-        user_ids = [conv.other_user_id for conv in conversations]
-        users = User.query.filter(User.propel_user_id.in_(user_ids)).all()
-        user_map = {user.propel_user_id: user.name for user in users}
+            if not messages:
+                return jsonify({"conversations": {}}), 200
 
-        # Build the response
-        response = {
-            conv.other_user_id: user_map.get(conv.other_user_id, "Unknown User")
-            for conv in conversations
-        }
+            # Extract unique conversation partner IDs
+            conversation_partners = {}
+            for message in messages:
+                other_user_id = (
+                    message["receiver_id"] if message["sender_id"] == user_id else message["sender_id"]
+                )
+                if other_user_id not in conversation_partners:
+                    conversation_partners[other_user_id] = message["created_at"]
 
-        return jsonify({"conversations": response}), 200
-    
+            # Fetch user details for the conversation partners
+            user_ids = list(conversation_partners.keys())
+            users = supabase.table("user").select("propel_user_id, name").in_("propel_user_id", user_ids).execute().data
+            user_map = {user["propel_user_id"]: user["name"] for user in users}
+
+            # Build the response
+            response = {
+                other_user_id: user_map.get(other_user_id, "Unknown User")
+                for other_user_id in conversation_partners
+            }
+
+            return jsonify({"conversations": response}), 200
+        except Exception as e:
+            print(f"Error in get_conversations: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
 
     @bp.route('/conversation', methods=['GET'])
     @auth.require_user
@@ -86,32 +106,31 @@ def create_message_routes(auth, supabase):
         if not sender_id or not receiver_id:
             return jsonify({"error": "Both sender_id and receiver_id are required"}), 400
         
-        sender_name = User.query.filter_by(propel_user_id=sender_id).first()
+        sender_name = supabase.table("user").select("name").eq("propel_user_id", sender_id).execute().data
 
         # Query messages sent by the sender to the receiver
-        sent_messages = Message.query.filter(
-            (Message.sender_id == sender_id) & (Message.receiver_id == receiver_id)
-        ).all()
+        sent_messages = supabase.table("message").select("*").eq("sender_id", sender_id).eq("receiver_id", receiver_id).execute().data
+
 
         # Query messages sent by the receiver to the sender
-        received_messages = Message.query.filter(
-            (Message.sender_id == receiver_id) & (Message.receiver_id == sender_id)
-        ).all()
+        received_messages = supabase.table("message").select("*").eq("sender_id", receiver_id).eq("receiver_id", sender_id).execute().data
 
         # Merge the two lists
         all_messages = sent_messages + received_messages
 
         # Sort the merged list by created_at
-        all_messages.sort(key=lambda msg: msg.created_at)
+        all_messages.sort(key=lambda x: x["created_at"])
+        print(all_messages)
 
         # Return the sorted messages
         return jsonify([{
-            "id": msg.id,
-            "sender_name": sender_name.name if sender_name else "Unknown",
-            "sender_id": msg.sender_id,
-            "receiver_id": msg.receiver_id,
-            "content": msg.content,
-            "created_at": msg.created_at.isoformat()
-        } for msg in all_messages]), 200
+            "id": message["id"],
+            "sender_id": message["sender_id"],
+            "receiver_id": message["receiver_id"],
+            "content": message["content"],
+            "created_at": message["created_at"],
+            "sender_name": sender_name[0]["name"] if sender_name else "Unknown User"
+        } for message in all_messages]), 200
+    
 
     return bp

@@ -1,72 +1,63 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import or_
-from models import User, Course, Note, db
+# from models import User, Course, Note, db
 
 # Optionally import an Organization model if available.
-try:
-    from models import Organization
-except ImportError:
-    Organization = None
+# try:
+#     from models import Organization
+# except ImportError:
+#     Organization = None
 
 def create_search_routes(auth, supabase):
     bp = Blueprint('search', __name__)
 
     @bp.route('', methods=['GET'])
     def search():
-        query = request.args.get("query", "").strip()
-        if not query:
-            return jsonify([]), 200
+        try:
+            query = request.args.get("query", "").strip()
+            if not query:
+                return jsonify([]), 200
 
-        # SQLite wildcard for partial matching
-        wildcard = f"%{query}%"
-        users = courses = orgs = notes = []
+            # Supabase wildcard for partial matching
+            wildcard = f"%{query}%"
+            users = courses = notes = []
 
-        # --- Search Users ---
-        user_objs = User.query.filter(
-            or_(
-                User.name.ilike(wildcard),
-                User.email.ilike(wildcard)
-            )
-        ).limit(10).all()
-        users = [{
-            "id": u.propel_user_id,
-            "type": "user",
-            "title": u.name,
-            "subtitle": u.email,
-            "url": f"/profile/{u.propel_user_id}"
-        } for u in user_objs]
+            # --- Search Users ---
+            user_results = supabase.table("user").select("*").ilike("name", wildcard).execute().data
+            users = [{
+                "id": u["propel_user_id"],
+                "type": "user",
+                "title": u["name"],
+                "subtitle": u["email"],
+                "url": f"/profile/{u['propel_user_id']}"
+            } for u in user_results]
 
-        # --- Search Courses ---
-        course_objs = Course.query.filter(Course.name.ilike(wildcard)).limit(10).all()
-        courses = [{
-            "id": c.id,
-            "type": "course",
-            "title": c.name,
-            "subtitle": "",
-            "url": f"/courses/{c.id}/notes"
-        } for c in course_objs]
+            # --- Search Courses ---
+            course_results = supabase.table("course").select("*").ilike("name", wildcard).execute().data
+            courses = [{
+                "id": c["id"],
+                "type": "course",
+                "title": c["name"],
+                "subtitle": "",
+                "url": f"/courses/{c['id']}/notes"
+            } for c in course_results]
 
-        # --- Search Organizations (if available) ---
-        if Organization:
-            org_objs = Organization.query.filter(
-                Organization.name.ilike(wildcard)
-            ).limit(10).all()
-            orgs = [{
-                "id": o.id,
-                "type": "organization",
-                "title": o.name,
-                "subtitle": getattr(o, 'description', ''),
-                "url": f"/org/{o.id}"
-            } for o in org_objs]
 
-  
-        # Combine all results
-        results = users + courses + orgs + notes
-        if not results:
-            # Instead of returning a dummy object, you can return an empty list.
-            # Your frontend must display a "No results found" message when it gets an empty list.
-            return jsonify([]), 200
+            # --- Search Notes ---
+            note_results = supabase.table("note").select("*").ilike("title", wildcard).execute().data
+            notes = [{
+                "id": n["id"],
+                "type": "note",
+                "title": n["title"],
+                "subtitle": "",
+                "url": f"/notes/{n['id']}"
+            } for n in note_results]
 
-        return jsonify(results), 200
+            # Combine all results
+            results = users + courses + notes
+            return jsonify(results), 200
+        except Exception as e:
+            print(f"Error in search: {e}")
+            return jsonify({"error": "Internal Server Error"}), 500
 
     return bp

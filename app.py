@@ -2,33 +2,21 @@ import os
 import stripe
 from flask import Flask
 from dotenv import load_dotenv
-from flask_sqlalchemy import SQLAlchemy
 from propelauth_flask import init_auth
-from flask_migrate import Migrate
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from supabase import create_client, Client
 
-
 # Load environment variables
 load_dotenv()
 
-# Initialize Flask app with a custom instance path
-app = Flask(__name__)  # Use /tmp as the writable directory
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'  # Replace with your actual database URI
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Initialize Flask app
+app = Flask(__name__)
 
-
+# Initialize Supabase client
 url: str = os.getenv("SUPABASE_URL")
 key: str = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
-
-#route for testing
-@app.route('/supabase')
-def supabase_test():
-    data = supabase.table("user").select("*").execute()
-    return {"data": data.data}
-
 
 # Enable CORS
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -36,18 +24,10 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Initialize database
-db = SQLAlchemy(app)
-
-# Initialize Flask-Migrate
-migrate = Migrate(app, db)
-
 # Initialize PropelAuth
 auth = init_auth(os.getenv("PROPELAUTH_AUTH_URL"), os.getenv("PROPELAUTH_API_KEY"))
 
-# Access the path of uploading files
-creds_path = os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH")
-
+# Stripe API Key
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 # Route Blueprints

@@ -1,7 +1,12 @@
 from flask import Blueprint, request, jsonify
 import stripe, os
 from functools import wraps
-from models import db, User
+# from models import db, User
+from supabase import create_client, Client
+
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
 payment_bp = Blueprint('payment', __name__)
 
@@ -72,11 +77,10 @@ def stripe_webhook():
         user_id = session.get("client_reference_id")
         if user_id:
             # Look up the user in your database
-            user = User.query.get(user_id)
+            user = supabase.table("user").select("*").eq("propel_user_id", user_id).execute().data
             if user:
                 # Update the user's premium status to True after successful payment.
-                user.is_premium = True
-                db.session.commit()
+                supabase.table("user").update({"is_premium": True}).eq("propel_user_id", user_id).execute()
     # Return a success message to acknowledge receipt of the webhook.
     return jsonify({'status': 'success'}), 200
 
